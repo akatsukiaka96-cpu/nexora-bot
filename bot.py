@@ -5,6 +5,8 @@ import discord
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+VERSION = "1.1.0"
+ALLOWED_GUILD_IDS = {int(x) for x in os.getenv("ALLOWED_GUILD_IDS", "").split(",") if x.strip().isdigit()}
 DB_PATH = os.getenv("DATABASE_PATH", "nexora.db")
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 OWNER_IDS = {int(x) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()}
@@ -21,7 +23,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 async def send_embed(ctx, content=None, *, embed=None, **kwargs):
     """Send a consistently branded NEXORA embed response."""
     if embed is None:
-        embed = discord.Embed(description=str(content) if content is not None else None, color=0x102A43)
+        embed = discord.Embed(description=str(content) if content is not None else None, color=0x00D2FF)
     else:
         embed.color = discord.Color(0x102A43)
     embed.set_author(name="NEXORA | COMMUNITY NETWORK")
@@ -77,10 +79,17 @@ def audit(uid,action,details):
         c.execute("INSERT INTO logs(actor_id,action,details,created_at) VALUES(?,?,?,?)",(uid,action,details[:400],ts()))
         c.commit()
 
+
+
+@bot.check
+async def restrict_to_authorized_servers(ctx):
+    # Commands are intentionally limited to the two explicitly authorized guild IDs.
+    return ctx.guild is not None and bool(ALLOWED_GUILD_IDS) and ctx.guild.id in ALLOWED_GUILD_IDS
+
 @bot.event
 async def on_ready():
     init_db()
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching,name="Discover. Connect. Belong."))
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching,name=f"NEXORA v{VERSION}"))
     log.info("NEXORA ready: %s",bot.user)
 
 @bot.event
@@ -98,6 +107,9 @@ async def dhelp(ctx):
     e=discord.Embed(title="NEXORA | Commands",description="Discover. Connect. Belong.",color=0x00D2FF)
     entries=[("!djoin INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
     for n,v in entries:e.add_field(name=n,value=v,inline=False)
+    if bot.user: e.add_field(name="Add NEXORA", value=f"[Invite the bot](https://discord.com/oauth2/authorize?client_id={bot.user.id}%26scope=bot%20applications.commands%26permissions=2048)", inline=False)
+    e.add_field(name="Version", value=f"v{VERSION}", inline=True)
+    e.add_field(name="Authorized servers", value="Fire and NEXORA only", inline=True)
     e.set_footer(text="All joins are voluntary. No join counts are guaranteed.")
     await branded_reply(ctx, embed=e)
 
@@ -254,6 +266,8 @@ async def dadminhelp(ctx):
 @bot.event
 async def on_command_error(ctx,error):
     if isinstance(error,commands.CommandNotFound):return
+    if isinstance(error,commands.CheckFailure):
+        return await branded_reply(ctx, "NEXORA commands are restricted to the authorized Fire and NEXORA servers.")
     if isinstance(error,commands.MissingRequiredArgument):return await branded_reply(ctx, "Missing information. Use !dhelp.")
     if isinstance(error,commands.BadArgument):return await branded_reply(ctx, "Invalid ID or argument.")
     log.error("Command error: %r",error)
