@@ -1,3 +1,4 @@
+import asyncio
 import os, re, sqlite3, logging
 from datetime import datetime, timezone
 import discord
@@ -68,26 +69,40 @@ async def dhelp(ctx):
     e.set_footer(text="All joins are voluntary. No join counts are guaranteed.")
     await ctx.send(embed=e)
 
+
+async def delete_djoin_command_later(message):
+    await asyncio.sleep(10)
+    try:
+        await message.delete()
+    except discord.HTTPException:
+        pass
+
+async def djoin_reply(ctx, *args, **kwargs):
+    kwargs.setdefault("delete_after", 10)
+    response = await ctx.reply(*args, **kwargs)
+    asyncio.create_task(delete_djoin_command_later(ctx.message))
+    return response
+
 @bot.command(name="djoin")
 async def djoin(ctx,server_id:int,invite_url:str):
     if not 10<=len(str(server_id))<=25 or not INVITE_RE.fullmatch(invite_url):
-        return await ctx.reply("Usage: !djoin SERVER_ID valid_discord_invite")
+        return await djoin_reply("Usage: !djoin SERVER_ID valid_discord_invite")
     guild=bot.get_guild(server_id)
-    if guild is None:return await ctx.reply("NEXORA must be installed in that server to verify its listing.")
+    if guild is None:return await djoin_reply("NEXORA must be installed in that server to verify its listing.")
     ensure_user(ctx.author.id)
     with conn() as c:
         old=c.execute("SELECT last_submit FROM cooldowns WHERE user_id=?",(ctx.author.id,)).fetchone()
         if old:
             elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(old["last_submit"])).total_seconds()
-            if elapsed<300:return await ctx.reply(f"Please wait {int(300-elapsed)} seconds before submitting again.")
+            if elapsed<300:return await djoin_reply(f"Please wait {int(300-elapsed)} seconds before submitting again.")
         prior=c.execute("SELECT owner_id FROM listings WHERE server_id=?",(server_id,)).fetchone()
-        if prior and prior["owner_id"]!=ctx.author.id and not is_admin(ctx):return await ctx.reply("That server already has a listing owner.")
+        if prior and prior["owner_id"]!=ctx.author.id and not is_admin(ctx):return await djoin_reply("That server already has a listing owner.")
         c.execute("""INSERT INTO listings(server_id,owner_id,invite_url,status,description,created_at,updated_at) VALUES(?,?,?,'pending',?,?,?)
         ON CONFLICT(server_id) DO UPDATE SET invite_url=excluded.invite_url,status='pending',updated_at=excluded.updated_at""",(server_id,ctx.author.id,invite_url,guild.description or "",ts(),ts()))
         c.execute("INSERT INTO cooldowns(user_id,last_submit) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_submit=excluded.last_submit",(ctx.author.id,ts()))
         c.commit()
     audit(ctx.author.id,"listing_submitted",str(server_id))
-    await ctx.reply(f"**{guild.name}** submitted for review. Members can choose to join using its invite. No one is automatically added.")
+    await djoin_reply(f"**{guild.name}** submitted for review. Members can choose to join using its invite. No one is automatically added.")
 
 @bot.command(name="dstatus")
 async def dstatus(ctx):
