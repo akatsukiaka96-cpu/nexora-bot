@@ -105,7 +105,7 @@ async def on_member_join(member):
 @bot.command(name="dhelp")
 async def dhelp(ctx):
     e=discord.Embed(title="NEXORA | Commands",description="Discover. Connect. Belong.",color=0x00D2FF)
-    entries=[("!djoin INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
+    entries=[("!djoin SERVER_ID","Submit a server ID for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
     for n,v in entries:e.add_field(name=n,value=v,inline=False)
     if bot.user: e.add_field(name="Add NEXORA", value=f"[Invite the bot](https://discord.com/oauth2/authorize?client_id={bot.user.id}&scope=bot%20applications.commands&permissions=93184)", inline=False)
     e.add_field(name="Version", value=f"v{VERSION}", inline=True)
@@ -184,7 +184,7 @@ async def djoin(ctx, server_id: int):
 @bot.command(name="dstatus")
 async def dstatus(ctx):
     with conn() as c: rows=c.execute("SELECT server_id,status FROM listings WHERE owner_id=? ORDER BY created_at DESC",(ctx.author.id,)).fetchall()
-    if not rows:return await branded_reply(ctx, "No listings yet. Use !djoin INVITE_URL.")
+    if not rows:return await branded_reply(ctx, "No listings yet. Use !djoin SERVER_ID.")
     shown=rows[:15]
     message="\n".join(f"• {r['server_id']} · {r['status'].title()}" for r in shown)
     if len(rows)>15: message += f"\nShowing the 15 most recent of {len(rows)} listings."
