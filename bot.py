@@ -18,6 +18,27 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+# NEXORA visual identity: bright cyan with deep old-navy branding.
+NEXORA_CYAN = 0x00D2FF
+NEXORA_NAVY = 0x0B1B36
+
+async def branded_reply(ctx, *args, **kwargs):
+    existing_embed = kwargs.pop("embed", None)
+    if existing_embed is not None:
+        existing_embed.color = NEXORA_CYAN
+        existing_embed.set_footer(text="NEXORA | Community Network")
+        return await ctx.reply(embed=existing_embed, **kwargs)
+
+    content = args[0] if args else kwargs.pop("content", None)
+    embed = discord.Embed(
+        title="NEXORA",
+        description=str(content) if content is not None else "",
+        color=NEXORA_CYAN
+    )
+    embed.set_footer(text="NEXORA | Community Network")
+    return await ctx.reply(embed=embed, **kwargs)
+
+
 def ts(): return datetime.now(timezone.utc).isoformat()
 def conn():
     c = sqlite3.connect(DB_PATH)
@@ -67,7 +88,7 @@ async def dhelp(ctx):
     entries=[("!djoin INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
     for n,v in entries:e.add_field(name=n,value=v,inline=False)
     e.set_footer(text="All joins are voluntary. No join counts are guaranteed.")
-    await ctx.send(embed=e)
+    await branded_reply(ctx, embed=e)
 
 
 async def purge_djoin_messages(command_message, response_message):
@@ -80,7 +101,7 @@ async def purge_djoin_messages(command_message, response_message):
 
 
 async def djoin_reply(ctx, *args, **kwargs):
-    response = await ctx.reply(*args, **kwargs)
+    response = await branded_reply(ctx, *args, **kwargs)
     asyncio.create_task(purge_djoin_messages(ctx.message, response))
     return response
 
@@ -126,11 +147,11 @@ async def djoin(ctx, invite_url: str):
 @bot.command(name="dstatus")
 async def dstatus(ctx):
     with conn() as c: rows=c.execute("SELECT server_id,status FROM listings WHERE owner_id=? ORDER BY created_at DESC",(ctx.author.id,)).fetchall()
-    if not rows:return await ctx.reply("No listings yet. Use !djoin INVITE_URL.")
+    if not rows:return await branded_reply(ctx, "No listings yet. Use !djoin INVITE_URL.")
     shown=rows[:15]
     message="\n".join(f"• {r['server_id']} · {r['status'].title()}" for r in shown)
     if len(rows)>15: message += f"\nShowing the 15 most recent of {len(rows)} listings."
-    await ctx.reply(message)
+    await branded_reply(ctx, message)
 
 @bot.command(name="dremove")
 async def dremove(ctx,server_id:int=None):
@@ -138,38 +159,38 @@ async def dremove(ctx,server_id:int=None):
         if server_id is None:
             r=c.execute("SELECT server_id FROM listings WHERE owner_id=? AND status!='removal_requested' ORDER BY created_at DESC LIMIT 1",(ctx.author.id,)).fetchone()
             server_id=r["server_id"] if r else None
-        if server_id is None:return await ctx.reply("No listing found.")
+        if server_id is None:return await branded_reply(ctx, "No listing found.")
         cur=c.execute("UPDATE listings SET status='removal_requested',updated_at=? WHERE server_id=? AND owner_id=?",(ts(),server_id,ctx.author.id))
         c.commit()
     if cur.rowcount:
         audit(ctx.author.id,"removal_requested",str(server_id))
-        await ctx.reply("Removal requested. An administrator will review it.")
-    else:await ctx.reply("No listing you own matched that ID.")
+        await branded_reply(ctx, "Removal requested. An administrator will review it.")
+    else:await branded_reply(ctx, "No listing you own matched that ID.")
 
 @bot.command(name="dinfo")
 async def dinfo(ctx,server_id:int):
     with conn() as c:r=c.execute("SELECT invite_url,description FROM listings WHERE server_id=? AND status='approved'",(server_id,)).fetchone()
-    if not r:return await ctx.reply("No approved listing found.")
+    if not r:return await branded_reply(ctx, "No approved listing found.")
     g=bot.get_guild(server_id)
     e=discord.Embed(title=g.name if g else f"Community {server_id}",description=r["description"] or "Community listing",color=0x00D2FF)
     e.add_field(name="Invite",value=r["invite_url"])
-    await ctx.reply(embed=e)
+    await branded_reply(ctx, embed=e)
 
 @bot.command(name="dquota")
 async def dquota(ctx):
     ensure_user(ctx.author.id)
     with conn() as c:r=c.execute("SELECT tier FROM users WHERE user_id=?",(ctx.author.id,)).fetchone()
-    await ctx.reply(f"Tier: **{r['tier'].title()}** Â· Up to **{TIERS[r['tier']]}** voluntary joins as a target per cycle. Not guaranteed. Five-minute submission cooldown.")
+    await branded_reply(ctx, f"Tier: **{r['tier'].title()}** Â· Up to **{TIERS[r['tier']]}** voluntary joins as a target per cycle. Not guaranteed. Five-minute submission cooldown.")
 
 @bot.command(name="dservers")
 async def dservers(ctx):
     with conn() as c:rows=c.execute("SELECT server_id,invite_url,description FROM listings WHERE status='approved' ORDER BY created_at DESC LIMIT 10").fetchall()
-    if not rows:return await ctx.reply("No approved communities listed yet.")
+    if not rows:return await branded_reply(ctx, "No approved communities listed yet.")
     e=discord.Embed(title="NEXORA | Discover",color=0x00D2FF)
     for r in rows:
         g=bot.get_guild(r["server_id"])
         e.add_field(name=g.name if g else f"Community {r['server_id']}",value=f"{r['description'][:120] or 'Community listing'}\n{r['invite_url']}",inline=False)
-    await ctx.reply(embed=e)
+    await branded_reply(ctx, embed=e)
 
 @bot.command(name="dprofile")
 async def dprofile(ctx):
@@ -179,53 +200,53 @@ async def dprofile(ctx):
         n=c.execute("SELECT COUNT(*) n FROM listings WHERE owner_id=?",(ctx.author.id,)).fetchone()["n"]
     e=discord.Embed(title=f"{ctx.author.display_name} | NEXORA",color=0x00D2FF)
     e.add_field(name="Tier",value=u["tier"].title());e.add_field(name="Listings",value=str(n));e.add_field(name="Verified joins",value=str(u["verified_joins"]))
-    await ctx.reply(embed=e)
+    await branded_reply(ctx, embed=e)
 
 @bot.command(name="dleaderboard")
 async def dleaderboard(ctx):
     with conn() as c:rows=c.execute("SELECT user_id,verified_joins FROM users ORDER BY verified_joins DESC LIMIT 10").fetchall()
-    if not rows:return await ctx.reply("Leaderboard is empty.")
+    if not rows:return await branded_reply(ctx, "Leaderboard is empty.")
     e=discord.Embed(title="NEXORA | Leaderboard",description="\n".join(f"{i}. <@{r['user_id']}> Â· {r['verified_joins']} verified joins" for i,r in enumerate(rows,1)),color=0x00D2FF)
-    await ctx.reply(embed=e)
+    await branded_reply(ctx, embed=e)
 
 @bot.command(name="dapprove")
 async def dapprove(ctx,server_id:int):
-    if not is_admin(ctx):return await ctx.reply("Administrator permission required.")
+    if not is_admin(ctx):return await branded_reply(ctx, "Administrator permission required.")
     with conn() as c:
         cur=c.execute("UPDATE listings SET status='approved',updated_at=? WHERE server_id=? AND status='pending'",(ts(),server_id));c.commit()
     if cur.rowcount:audit(ctx.author.id,"listing_approved",str(server_id))
-    await ctx.reply("Listing approved." if cur.rowcount else "Pending listing not found.")
+    await branded_reply(ctx, "Listing approved." if cur.rowcount else "Pending listing not found.")
 
 @bot.command(name="dreject")
 async def dreject(ctx,server_id:int,*,reason="No reason supplied"):
-    if not is_admin(ctx):return await ctx.reply("Administrator permission required.")
+    if not is_admin(ctx):return await branded_reply(ctx, "Administrator permission required.")
     with conn() as c:
         cur=c.execute("UPDATE listings SET status='rejected',updated_at=? WHERE server_id=?",(ts(),server_id));c.commit()
     if cur.rowcount:audit(ctx.author.id,"listing_rejected",f"{server_id}: {reason}")
-    await ctx.reply("Listing rejected." if cur.rowcount else "Listing not found.")
+    await branded_reply(ctx, "Listing rejected." if cur.rowcount else "Listing not found.")
 
 @bot.command(name="dtier")
 async def dtier(ctx,user_id:int,tier:str):
-    if not is_admin(ctx):return await ctx.reply("Administrator permission required.")
+    if not is_admin(ctx):return await branded_reply(ctx, "Administrator permission required.")
     tier=tier.lower()
-    if tier not in TIERS:return await ctx.reply("Use Normal, Bronze, Silver, Platinum, or Premium.")
+    if tier not in TIERS:return await branded_reply(ctx, "Use Normal, Bronze, Silver, Platinum, or Premium.")
     ensure_user(user_id)
     with conn() as c:c.execute("UPDATE users SET tier=? WHERE user_id=?",(tier,user_id));c.commit()
     audit(ctx.author.id,"tier_changed",f"{user_id}: {tier}")
-    await ctx.reply(f"Tier updated to **{tier.title()}**.")
+    await branded_reply(ctx, f"Tier updated to **{tier.title()}**.")
 
 @bot.command(name="dadminhelp")
 async def dadminhelp(ctx):
-    if not is_admin(ctx):return await ctx.reply("Administrator permission required.")
-    await ctx.reply("Admin: !dapprove SERVER_ID | !dreject SERVER_ID [reason] | !dtier USER_ID TIER")
+    if not is_admin(ctx):return await branded_reply(ctx, "Administrator permission required.")
+    await branded_reply(ctx, "Admin: !dapprove SERVER_ID | !dreject SERVER_ID [reason] | !dtier USER_ID TIER")
 
 @bot.event
 async def on_command_error(ctx,error):
     if isinstance(error,commands.CommandNotFound):return
-    if isinstance(error,commands.MissingRequiredArgument):return await ctx.reply("Missing information. Use !dhelp.")
-    if isinstance(error,commands.BadArgument):return await ctx.reply("Invalid ID or argument.")
+    if isinstance(error,commands.MissingRequiredArgument):return await branded_reply(ctx, "Missing information. Use !dhelp.")
+    if isinstance(error,commands.BadArgument):return await branded_reply(ctx, "Invalid ID or argument.")
     log.error("Command error: %r",error)
-    await ctx.reply("An error occurred and was logged.")
+    await branded_reply(ctx, "An error occurred and was logged.")
 
 if not TOKEN:raise RuntimeError("DISCORD_TOKEN environment variable is required.")
 init_db()
