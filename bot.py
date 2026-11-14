@@ -107,7 +107,7 @@ async def dhelp(ctx):
     e=discord.Embed(title="NEXORA | Commands",description="Discover. Connect. Belong.",color=0x00D2FF)
     entries=[("!djoin INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
     for n,v in entries:e.add_field(name=n,value=v,inline=False)
-    if bot.user: e.add_field(name="Add NEXORA", value=f"[Invite the bot](https://discord.com/oauth2/authorize?client_id={bot.user.id}%26scope=bot%20applications.commands%26permissions=2048)", inline=False)
+    if bot.user: e.add_field(name="Add NEXORA", value=f"[Invite the bot](https://discord.com/oauth2/authorize?client_id={bot.user.id}&scope=bot%20applications.commands&permissions=93184)", inline=False)
     e.add_field(name="Version", value=f"v{VERSION}", inline=True)
     e.add_field(name="Authorized servers", value="Fire and NEXORA only", inline=True)
     e.set_footer(text="All joins are voluntary. No join counts are guaranteed.")
