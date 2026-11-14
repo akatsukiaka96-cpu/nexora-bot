@@ -130,41 +130,55 @@ async def djoin_reply(ctx, *args, **kwargs):
 
 
 @bot.command(name="djoin")
-async def djoin(ctx, invite_url: str):
-    if not INVITE_RE.fullmatch(invite_url):
-        return await djoin_reply(ctx, "Usage: !djoin https://discord.gg/your-invite")
-
-    try:
-        invite = await bot.fetch_invite(invite_url)
-    except discord.HTTPException:
-        return await djoin_reply(ctx, "That invite link is invalid or expired. Please check it and try again.")
-
-    if invite.guild is None:
-        return await djoin_reply(ctx, "I couldn't identify the server from that invite. Please use a server invite link.")
-
-    server_id = invite.guild.id
+async def djoin(ctx, server_id: int):
+    # Accept a numeric server ID only. The bot must already be a member
+    # of the target server and have permission to create an invite.
     guild = bot.get_guild(server_id)
     if guild is None:
-        return await djoin_reply(ctx, "NEXORA must be installed in that server before it can be submitted.")
+        return await djoin_reply(ctx, "I can't access that server. NEXORA must already be installed there and online before it can create an invite from its ID.")
+
+    invite_channel = None
+    if guild.me is not None:
+        for channel in guild.text_channels:
+            permissions = channel.permissions_for(guild.me)
+            if permissions.view_channel and permissions.create_instant_invite:
+                invite_channel = channel
+                break
+
+    if invite_channel is None:
+        return await djoin_reply(ctx, "I found the server, but I don't have permission to create an invite. Give NEXORA View Channel and Create Instant Invite in at least one text channel.")
+
+    try:
+        invite = await invite_channel.create_invite(max_age=0, max_uses=0, unique=True, reason=f"NEXORA listing submitted by {ctx.author}")
+    except discord.HTTPException:
+        return await djoin_reply(ctx, "I couldn't create an invite. Check my channel permissions and try again.")
 
     invite_url = invite.url
     ensure_user(ctx.author.id)
     with conn() as c:
         old = c.execute("SELECT last_submit FROM cooldowns WHERE user_id=?", (ctx.author.id,)).fetchone()
         if old:
-            elapsed = (datetime.now(timezone.utc)-datetime.fromisoformat(old["last_submit"])).total_seconds()
+            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(old["last_submit"])).total_seconds()
             if elapsed < 300:
-                return await djoin_reply(ctx, f"Please wait {int(300-elapsed)} seconds before submitting again.")
+                return await djoin_reply(ctx, f"Please wait {int(300 - elapsed)} seconds before submitting again.")
+
         prior = c.execute("SELECT owner_id FROM listings WHERE server_id=?", (server_id,)).fetchone()
         if prior and prior["owner_id"] != ctx.author.id and not is_admin(ctx):
             return await djoin_reply(ctx, "That server already has a listing owner.")
-        c.execute("""INSERT INTO listings(server_id,owner_id,invite_url,status,description,created_at,updated_at) VALUES(?,?,?,'pending',?,?,?)
-        ON CONFLICT(server_id) DO UPDATE SET invite_url=excluded.invite_url,status='pending',updated_at=excluded.updated_at""",
-        (server_id,ctx.author.id,invite_url,guild.description or "",ts(),ts()))
-        c.execute("INSERT INTO cooldowns(user_id,last_submit) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_submit=excluded.last_submit",(ctx.author.id,ts()))
+
+        c.execute("""
+            INSERT INTO listings(server_id,owner_id,invite_url,status,description,created_at,updated_at)
+            VALUES(?,?,?,'pending',?,?,?)
+            ON CONFLICT(server_id) DO UPDATE SET
+                invite_url=excluded.invite_url,
+                status='pending',
+                updated_at=excluded.updated_at
+        """, (server_id, ctx.author.id, invite_url, guild.description or "", ts(), ts()))
+        c.execute("INSERT INTO cooldowns(user_id,last_submit) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_submit=excluded.last_submit", (ctx.author.id, ts()))
         c.commit()
-    audit(ctx.author.id,"listing_submitted",str(server_id))
-    await djoin_reply(ctx, f"**{guild.name}** submitted for review. Members can choose to join using its invite. No one is automatically added.")
+
+    audit(ctx.author.id, "listing_submitted", str(server_id))
+    await djoin_reply(ctx, f"**{guild.name}** (`{server_id}`) was submitted for review. Members can choose to join using its invite once approved. Nobody is added automatically.")
 
 
 @bot.command(name="dstatus")
@@ -269,7 +283,7 @@ async def on_command_error(ctx,error):
     if isinstance(error,commands.CheckFailure):
         return await branded_reply(ctx, "NEXORA commands are restricted to the authorized Fire and NEXORA servers.")
     if isinstance(error,commands.MissingRequiredArgument):return await branded_reply(ctx, "Missing information. Use !dhelp.")
-    if isinstance(error,commands.BadArgument):return await branded_reply(ctx, "Invalid ID or argument.")
+    if isinstance(error,commands.BadArgument):return await branded_reply(ctx, "Please provide a numeric server ID. Usage: !djoin SERVER_ID")
     log.error("Command error: %r",error)
     await branded_reply(ctx, "An error occurred and was logged.")
 
