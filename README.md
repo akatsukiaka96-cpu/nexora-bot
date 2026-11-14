@@ -8,9 +8,9 @@ A Python Discord community-discovery bot with reviewed listings, voluntary invit
 
 NEXORA does not pull, scrape, force-add, or mass-invite members. !djoin submits a server listing for review; members choose whether to join via its invite. Premium's up-to-50 figure is a target, never a promise. Join counts are recorded only in guilds where the bot is installed and Discord delivers a member-join event.
 
-## Commands
+## Commands\n\nCurrent release: **v1.1.1**
 
-- !djoin SERVER_ID INVITE_URL
+- !djoin SERVER_ID (digits only; NEXORA must already be installed in the target server)
 - !dstatus, !dremove [SERVER_ID], !dinfo SERVER_ID
 - !dquota, !dservers, !dprofile, !dleaderboard, !dhelp
 - Admin: !dapprove SERVER_ID, !dreject SERVER_ID [reason], !dtier USER_ID TIER, !dadminhelp
