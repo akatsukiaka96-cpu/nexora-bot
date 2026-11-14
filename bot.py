@@ -37,7 +37,8 @@ def ensure_user(uid):
         c.execute("INSERT OR IGNORE INTO users(user_id,created_at) VALUES(?,?)",(uid,ts()))
         c.commit()
 def is_admin(ctx):
-    return ctx.author.id in OWNER_IDS or bool(ctx.guild and ctx.author.guild_permissions.manage_guild)
+    # These commands control the network-wide directory, so only configured owners may use them.
+    return ctx.author.id in OWNER_IDS
 def audit(uid,action,details):
     with conn() as c:
         c.execute("INSERT INTO logs(actor_id,action,details,created_at) VALUES(?,?,?,?)",(uid,action,details[:400],ts()))
@@ -92,7 +93,10 @@ async def djoin(ctx,server_id:int,invite_url:str):
 async def dstatus(ctx):
     with conn() as c: rows=c.execute("SELECT server_id,status FROM listings WHERE owner_id=? ORDER BY created_at DESC",(ctx.author.id,)).fetchall()
     if not rows:return await ctx.reply("No listings yet. Use !djoin SERVER_ID INVITE_URL.")
-    await ctx.reply("\n".join(f"• {r['server_id']} · {r['status'].title()}" for r in rows))
+    shown=rows[:15]
+    message="\n".join(f"• {r['server_id']} · {r['status'].title()}" for r in shown)
+    if len(rows)>15: message += f"\nShowing the 15 most recent of {len(rows)} listings."
+    await ctx.reply(message)
 
 @bot.command(name="dremove")
 async def dremove(ctx,server_id:int=None):
@@ -121,7 +125,7 @@ async def dinfo(ctx,server_id:int):
 async def dquota(ctx):
     ensure_user(ctx.author.id)
     with conn() as c:r=c.execute("SELECT tier FROM users WHERE user_id=?",(ctx.author.id,)).fetchone()
-    await ctx.reply(f"Tier: **{r['tier'].title()}** · Up to **{TIERS[r['tier']]}** voluntary joins as a target per cycle. Not guaranteed. Five-minute submission cooldown.")
+    await ctx.reply(f"Tier: **{r['tier'].title()}** Â· Up to **{TIERS[r['tier']]}** voluntary joins as a target per cycle. Not guaranteed. Five-minute submission cooldown.")
 
 @bot.command(name="dservers")
 async def dservers(ctx):
@@ -147,14 +151,14 @@ async def dprofile(ctx):
 async def dleaderboard(ctx):
     with conn() as c:rows=c.execute("SELECT user_id,verified_joins FROM users ORDER BY verified_joins DESC LIMIT 10").fetchall()
     if not rows:return await ctx.reply("Leaderboard is empty.")
-    e=discord.Embed(title="NEXORA | Leaderboard",description="\n".join(f"{i}. <@{r['user_id']}> · {r['verified_joins']} verified joins" for i,r in enumerate(rows,1)),color=0x00D2FF)
+    e=discord.Embed(title="NEXORA | Leaderboard",description="\n".join(f"{i}. <@{r['user_id']}> Â· {r['verified_joins']} verified joins" for i,r in enumerate(rows,1)),color=0x00D2FF)
     await ctx.reply(embed=e)
 
 @bot.command(name="dapprove")
 async def dapprove(ctx,server_id:int):
     if not is_admin(ctx):return await ctx.reply("Administrator permission required.")
     with conn() as c:
-        cur=c.execute("UPDATE listings SET status='approved',updated_at=? WHERE server_id=? AND status IN ('pending','removal_requested')",(ts(),server_id));c.commit()
+        cur=c.execute("UPDATE listings SET status='approved',updated_at=? WHERE server_id=? AND status='pending'",(ts(),server_id));c.commit()
     if cur.rowcount:audit(ctx.author.id,"listing_approved",str(server_id))
     await ctx.reply("Listing approved." if cur.rowcount else "Pending listing not found.")
 
