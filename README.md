@@ -69,7 +69,7 @@ BACKUP_RETENTION=7
 - Deploy using the included Dockerfile.
 - Keep the existing Railway volume mounted at the same location. Do not delete or recreate it.
 - Keep `DATABASE_PATH` pointing at the existing database file. If the current deployment uses a different path, preserve that exact value instead of copying the example.
-- Enable Message Content Intent, Server Members Intent, and Reaction Intent in the Discord Developer Portal.
+- Enable Message Content Intent and Server Members Intent in the Discord Developer Portal. Reaction events are enabled in the bot code.
 - Bot permissions needed: View Channels, Send Messages, Embed Links, Read Message History, Add Reactions, and Create Instant Invite in target community servers.
 
 ## Backups and data safety
