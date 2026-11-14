@@ -5,9 +5,10 @@ from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 DB_PATH = os.getenv("DATABASE_PATH", "nexora.db")
+os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 OWNER_IDS = {int(x) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()}
 TIERS = {"normal": 0, "bronze": 5, "silver": 10, "platinum": 25, "premium": 50}
-INVITE_RE = re.compile(r"^(https?://)?(www\\.)?(discord\\.gg|discord\\.com/invite)/[A-Za-z0-9-]+/?$", re.I)
+INVITE_RE = re.compile(r"^(https?://)?(www\.)?(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]+/?$", re.I)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nexora")
 intents = discord.Intents.default()
