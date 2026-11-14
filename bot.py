@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 ALLOWED_GUILD_IDS = {int(x) for x in os.getenv("ALLOWED_GUILD_IDS", "1507663008292405339,1571079983596830810").split(",") if x.strip().isdigit()}
 DB_PATH = os.getenv("DATABASE_PATH", "nexora.db")
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
@@ -124,13 +124,24 @@ async def purge_djoin_messages(command_message, response_message):
 
 
 async def djoin_reply(ctx, *args, **kwargs):
+    # Stamp every submission response so users can identify the running build.
+    if args:
+        args = (f"**NEXORA v{VERSION}**\\n{args[0]}", *args[1:])
+    elif kwargs.get("content") is not None:
+        kwargs["content"] = f"**NEXORA v{VERSION}**\\n{kwargs['content']}"
     response = await branded_reply(ctx, *args, **kwargs)
     asyncio.create_task(purge_djoin_messages(ctx.message, response))
     return response
 
 
 @bot.command(name="djoin")
-async def djoin(ctx, server_id: int):
+async def djoin(ctx, *, server_id: str = ""):
+    # Parse raw input ourselves so malformed arguments get a clear response, not a generic parser error.
+    server_id = server_id.strip()
+    if not server_id.isdigit():
+        return await djoin_reply(ctx, "Invalid server ID. Send digits only. Usage: `!djoin SERVER_ID`.")
+    server_id = int(server_id)
+    log.info("djoin command received: user=%s guild=%s target_server=%s", ctx.author.id, ctx.guild.id if ctx.guild else None, server_id)
     # Accept a numeric server ID only. The bot must already be a member
     # of the target server and have permission to create an invite.
     guild = bot.get_guild(server_id)
