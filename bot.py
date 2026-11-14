@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import contextmanager
 import os
 import random
 import re
@@ -10,10 +11,13 @@ import discord
 from discord.ext import commands, tasks
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 ALLOWED_GUILD_IDS = {int(x.strip()) for x in os.getenv("ALLOWED_GUILD_IDS", "1507663008292405339,1571079983596830810").split(",") if x.strip().isdigit()}
 OWNER_IDS = {int(x.strip()) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()}
 DB_PATH = os.getenv("DATABASE_PATH", "nexora.db")
+FIRE_GUILD_ID = 1507663008292405339
+BACKUP_DIR = os.getenv("BACKUP_DIR", os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups"))
+BACKUP_RETENTION = max(1, int(os.getenv("BACKUP_RETENTION", "7")))
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 
 BLACK, SILVER, DARK_SILVER = 0x111318, 0xC0C5CE, 0x343A40
@@ -39,10 +43,18 @@ def stamp():
     return now().isoformat()
 
 
+@contextmanager
 def db():
     connection = sqlite3.connect(DB_PATH, timeout=20)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def init_db():
@@ -85,7 +97,20 @@ def ensure_user(user_id):
 
 
 def is_owner(ctx):
-    return ctx.author.id in OWNER_IDS
+    if ctx.author.id in OWNER_IDS:
+        return True
+    fire = bot.get_guild(FIRE_GUILD_ID)
+    return bool(fire and ctx.author.id == fire.owner_id)
+
+
+async def get_member_safe(guild, user_id):
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
 
 
 def audit(actor_id, action, details=""):
@@ -145,31 +170,50 @@ async def on_ready():
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Serving Fire + NEXORA"))
     if not giveaway_watcher.is_running():
         giveaway_watcher.start()
+    if not backup_watcher.is_running():
+        backup_watcher.start()
     log.info("NEXORA %s online as %s", VERSION, bot.user)
 
 
 @bot.event
 async def on_member_join(member):
-    if member.guild.id not in ALLOWED_GUILD_IDS:
-        return
+    # Track joins in every approved listed community, not just the two command servers.
     with db() as c:
         row = c.execute("SELECT owner_id FROM listings WHERE server_id=? AND status='approved'", (member.guild.id,)).fetchone()
         if row:
+            c.execute("INSERT OR IGNORE INTO users(user_id,created_at) VALUES(?,?)", (row["owner_id"], stamp()))
             cur = c.execute("INSERT OR IGNORE INTO joins(server_id,member_id,joined_at) VALUES(?,?,?)", (member.guild.id, member.id, stamp()))
             if cur.rowcount:
                 c.execute("UPDATE users SET verified_joins=verified_joins+1 WHERE user_id=?", (row["owner_id"],))
-        c.commit()
 
 
 @bot.event
 async def on_raw_reaction_add(payload):
     if str(payload.emoji) != "🎉" or (bot.user and payload.user_id == bot.user.id):
         return
+    if payload.member is not None and payload.member.bot:
+        return
+    if payload.member is None:
+        user = bot.get_user(payload.user_id)
+        if user is None:
+            try:
+                user = await bot.fetch_user(payload.user_id)
+            except discord.HTTPException:
+                return
+        if user.bot:
+            return
     with db() as c:
         row = c.execute("SELECT ended FROM giveaways WHERE message_id=?", (payload.message_id,)).fetchone()
         if row and not row["ended"]:
             c.execute("INSERT OR IGNORE INTO giveaway_entries(message_id,user_id) VALUES(?,?)", (payload.message_id, payload.user_id))
-            c.commit()
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if str(payload.emoji) != "🎉":
+        return
+    with db() as c:
+        c.execute("DELETE FROM giveaway_entries WHERE message_id=? AND user_id=?", (payload.message_id, payload.user_id))
 
 
 async def finish_giveaway(message_id, reroll=False):
@@ -190,11 +234,14 @@ async def finish_giveaway(message_id, reroll=False):
     if channel:
         try:
             message = await channel.fetch_message(message_id)
-            embed = message.embeds[0] if message.embeds else discord.Embed()
-            embed.title = "NEXORA | Giveaway Ended"
-            embed.description = f"Prize: {giveaway['prize']}\\nEntries: {len(entries)}"
-            embed.color = SILVER
+            embed = discord.Embed(
+                title="NEXORA | Giveaway Ended",
+                description=f"**Prize:** {giveaway['prize']}\n**Entries:** {len(entries)}",
+                color=SILVER,
+                timestamp=now(),
+            )
             embed.add_field(name="Winner(s)", value=", ".join(f"<@{uid}>" for uid in winners) if winners else "No valid entries", inline=False)
+            embed.set_footer(text=f"NEXORA v{VERSION} | Giveaway complete")
             await message.edit(embed=embed)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
@@ -207,6 +254,41 @@ async def giveaway_watcher():
         rows = c.execute("SELECT message_id FROM giveaways WHERE ended=0 AND ends_at<=?", (stamp(),)).fetchall()
     for row in rows:
         await finish_giveaway(row["message_id"])
+
+
+def backup_database():
+    if not os.path.exists(DB_PATH):
+        return None
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    filename = f"nexora-{now().strftime('%Y%m%d-%H%M%S')}.db"
+    destination = os.path.join(BACKUP_DIR, filename)
+    with sqlite3.connect(DB_PATH, timeout=30) as source:
+        with sqlite3.connect(destination, timeout=30) as target:
+            source.backup(target)
+    backups = sorted(
+        (os.path.join(BACKUP_DIR, name) for name in os.listdir(BACKUP_DIR) if name.endswith(".db")),
+        key=os.path.getmtime, reverse=True,
+    )
+    for old_backup in backups[BACKUP_RETENTION:]:
+        try:
+            os.remove(old_backup)
+        except OSError:
+            log.exception("Could not remove expired backup %s", old_backup)
+    log.info("Database backup created: %s", destination)
+    return destination
+
+
+@tasks.loop(hours=24)
+async def backup_watcher():
+    try:
+        await asyncio.to_thread(backup_database)
+    except Exception:
+        log.exception("Automatic database backup failed")
+
+
+@backup_watcher.before_loop
+async def before_backup_watcher():
+    await bot.wait_until_ready()
 
 
 @bot.command(name="dhelp")
@@ -227,7 +309,7 @@ async def dhelp(ctx):
         ("!dgiveaway 10m 1 Prize", "Create a giveaway; 30 seconds to 30 days."),
         ("!dstats", "View network statistics."),
         ("!dpurge 3|10", "Set auto-purge delay (network owner)."),
-        ("Owner tools", "!dapprove, !dreject, !dtier, !daudit, !dmaintenance, !dendgiveaway, !dreroll"),
+        ("Owner tools", "!dapprove, !dreject, !dtier, !daudit, !dmaintenance, !dendgiveaway, !dreroll, !dbackup"),
     ]
     if bot.user:
         fields.append(("Invite NEXORA", f"[Add the bot](https://discord.com/oauth2/authorize?client_id={bot.user.id}&scope=bot%20applications.commands&permissions=93184)"))
@@ -242,7 +324,7 @@ async def djoin(ctx, server_id: str = ""):
     guild = bot.get_guild(server_id)
     if guild is None:
         return await djoin_reply(ctx, "Verification Required", "NEXORA must be installed in the target server to verify permissions and create its invite.")
-    member = guild.get_member(ctx.author.id)
+    member = await get_member_safe(guild, ctx.author.id)
     if member is None or not (member.id == guild.owner_id or member.guild_permissions.manage_guild):
         return await djoin_reply(ctx, "Verification Failed", "You must own the target server or have Manage Server permission there.")
     with db() as c:
@@ -254,7 +336,10 @@ async def djoin(ctx, server_id: str = ""):
         prior = c.execute("SELECT owner_id FROM listings WHERE server_id=?", (server_id,)).fetchone()
         if prior and prior["owner_id"] != ctx.author.id and not is_owner(ctx):
             return await djoin_reply(ctx, "Already Listed", "This server already has a different listing owner.")
-    channel = next((ch for ch in guild.text_channels if ch.permissions_for(guild.me).view_channel and ch.permissions_for(guild.me).create_instant_invite), None)
+    bot_member = guild.me
+    if bot_member is None:
+        return await djoin_reply(ctx, "Bot Not Ready", "I cannot verify my server permissions yet. Try again shortly.")
+    channel = next((ch for ch in guild.text_channels if ch.permissions_for(bot_member).view_channel and ch.permissions_for(bot_member).create_instant_invite), None)
     if channel is None:
         return await djoin_reply(ctx, "Invite Permission Missing", "Give NEXORA View Channel and Create Instant Invite in one target-server text channel.")
     try:
@@ -271,15 +356,18 @@ async def djoin(ctx, server_id: str = ""):
         c.commit()
     ensure_user(ctx.author.id)
     audit(ctx.author.id, "listing_published", server_id)
-    return await djoin_reply(ctx, "Listing Published", f"**{guild.name}** is now live.\\nServer ID: {server_id}\\n[Join community]({invite.url})\\n\\nMembers choose whether to join. No one is added automatically.")
+    return await djoin_reply(ctx, "Listing Published", f"**{guild.name}** is now live.\nServer ID: {server_id}\n[Join community]({invite.url})\n\nMembers choose whether to join. No one is added automatically.")
 
 
 @bot.command(name="dverify")
 async def dverify(ctx, server_id: int):
     guild = bot.get_guild(server_id)
-    member = guild.get_member(ctx.author.id) if guild else None
+    member = await get_member_safe(guild, ctx.author.id) if guild else None
     if not member or not (member.id == guild.owner_id or member.guild_permissions.manage_guild):
         return await error_embed(ctx, "NEXORA must be installed in that server, and you must own it or have Manage Server permission.")
+    with db() as c:
+        c.execute("INSERT INTO verified_servers(server_id,owner_id,verified_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET owner_id=excluded.owner_id,verified_at=excluded.verified_at", (server_id, ctx.author.id, stamp()))
+    audit(ctx.author.id, "server_verified", server_id)
     await reply_embed(ctx, "Server Verified", f"{guild.name} is verified for your account. Use !djoin {server_id} to publish.")
 
 
@@ -289,7 +377,7 @@ async def dstatus(ctx):
         rows = c.execute("SELECT server_id,status,updated_at FROM listings WHERE owner_id=? ORDER BY updated_at DESC LIMIT 15", (ctx.author.id,)).fetchall()
     if not rows:
         return await reply_embed(ctx, "Your Listings", "No listings yet. Use !djoin SERVER_ID.")
-    await reply_embed(ctx, "Your Listings", "Latest listings.", fields=[(str(r["server_id"]), f"Status: {r['status'].title()}\\nUpdated: {r['updated_at'][:10]}", False) for r in rows])
+    await reply_embed(ctx, "Your Listings", "Latest listings.", fields=[(str(r["server_id"]), f"Status: {r['status'].title()}\nUpdated: {r['updated_at'][:10]}", False) for r in rows])
 
 
 @bot.command(name="dservers")
@@ -305,7 +393,7 @@ async def dservers(ctx):
         guild = bot.get_guild(r["server_id"])
         name = guild.name if guild else f"Community {r['server_id']}"
         rating = f"{r['rating']:.1f}/5 ({r['review_count']} reviews)" if r["review_count"] else "Not rated"
-        fields.append((name, f"{r['description'][:160] or 'Community listing'}\\nRating: {rating}\\n[Join]({r['invite_url']})", False))
+        fields.append((name, f"{r['description'][:160] or 'Community listing'}\nRating: {rating}\n[Join]({r['invite_url']})", False))
     await reply_embed(ctx, "Community Directory", "Joining is always voluntary.", fields=fields)
 
 
@@ -365,7 +453,7 @@ async def ddashboard(ctx):
 async def dleaderboard(ctx):
     with db() as c:
         rows = c.execute("SELECT user_id,verified_joins FROM users ORDER BY verified_joins DESC LIMIT 10").fetchall()
-    text = "\\n".join(f"**{i}.** <@{r['user_id']}> | {r['verified_joins']} verified joins" for i, r in enumerate(rows, 1))
+    text = "\n".join(f"**{i}.** <@{r['user_id']}> | {r['verified_joins']} verified joins" for i, r in enumerate(rows, 1))
     await reply_embed(ctx, "Community Leaderboard", text or "No activity recorded yet.")
 
 
@@ -403,7 +491,7 @@ async def dpartner(ctx, server_id: int):
 async def dpartners(ctx):
     with db() as c:
         rows = c.execute("SELECT server_id FROM partners WHERE status='approved' ORDER BY updated_at DESC LIMIT 15").fetchall()
-    await reply_embed(ctx, "Network Partners", "\\n".join(f"• {r['server_id']}" for r in rows) if rows else "No partner communities yet.")
+    await reply_embed(ctx, "Network Partners", "\n".join(f"• {r['server_id']}" for r in rows) if rows else "No partner communities yet.")
 
 
 @bot.command(name="dstats")
@@ -440,7 +528,7 @@ async def dgiveaway(ctx, duration: str, winners_count: int, *, prize: str):
     if not 1 <= winners_count <= 10 or not prize.strip():
         return await error_embed(ctx, "Choose 1-10 winners and provide a prize. Example: !dgiveaway 10m 1 Nitro.")
     ends = now() + timedelta(seconds=seconds)
-    embed = discord.Embed(title="NEXORA | Giveaway", description=f"**Prize:** {prize[:200]}\\n**Winners:** {winners_count}\\n**Ends:** <t:{int(ends.timestamp())}:R>\\n\\nReact with 🎉 to enter!", color=SILVER, timestamp=now())
+    embed = discord.Embed(title="NEXORA | Giveaway", description=f"**Prize:** {prize[:200]}\n**Winners:** {winners_count}\n**Ends:** <t:{int(ends.timestamp())}:R>\n\nReact with 🎉 to enter!", color=SILVER, timestamp=now())
     embed.set_footer(text=f"Hosted by {ctx.author} | NEXORA v{VERSION}")
     message = await ctx.send(embed=embed)
     await message.add_reaction("🎉")
@@ -520,7 +608,7 @@ async def daudit(ctx, limit: int = 10):
     limit = max(1, min(limit, 15))
     with db() as c:
         rows = c.execute("SELECT actor_id,action,details,created_at FROM logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    fields = [(r["action"], f"Actor: {r['actor_id']}\\n{r['details']}\\n{r['created_at'][:19]}", False) for r in rows]
+    fields = [(r["action"], f"Actor: {r['actor_id']}\n{r['details']}\n{r['created_at'][:19]}", False) for r in rows]
     await reply_embed(ctx, "Audit Log", f"Latest {len(rows)} events.", fields=fields)
 
 
@@ -548,11 +636,26 @@ async def dpartnerapprove(ctx, server_id: int):
     await reply_embed(ctx, "Partner Review", "Partner approved." if cur.rowcount else "Application not found.")
 
 
+@bot.command(name="dbackup")
+async def dbackup(ctx):
+    if not is_owner(ctx):
+        return await error_embed(ctx, "Only the Fire server owner or a configured network owner can create backups.")
+    try:
+        path = await asyncio.to_thread(backup_database)
+    except Exception:
+        log.exception("Manual database backup failed")
+        return await error_embed(ctx, "The backup failed. Check the Railway logs and storage permissions.")
+    if not path:
+        return await error_embed(ctx, "The database file was not found, so no backup was created.")
+    audit(ctx.author.id, "manual_database_backup", os.path.basename(path))
+    await reply_embed(ctx, "Database Backup Created", f"A database backup was saved as `{os.path.basename(path)}`.")
+
+
 @bot.command(name="dadminhelp")
 async def dadminhelp(ctx):
     if not is_owner(ctx):
         return await error_embed(ctx, "Only the configured network owner can view owner commands.")
-    await reply_embed(ctx, "Owner Commands", "!dapprove SERVER_ID\\n!dreject SERVER_ID reason\\n!dtier USER_ID TIER\\n!daudit [limit]\\n!dmaintenance on|off\\n!dpurge 3|10\\n!dendgiveaway MESSAGE_ID\\n!dreroll MESSAGE_ID\\n!dpartnerapprove SERVER_ID")
+    await reply_embed(ctx, "Owner Commands", "!dapprove SERVER_ID\n!dreject SERVER_ID reason\n!dtier USER_ID TIER\n!daudit [limit]\n!dmaintenance on|off\n!dpurge 3|10\n!dendgiveaway MESSAGE_ID\n!dreroll MESSAGE_ID\n!dpartnerapprove SERVER_ID\n!dbackup")
 
 
 @bot.event

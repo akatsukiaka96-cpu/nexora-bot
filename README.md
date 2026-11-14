@@ -1,65 +1,78 @@
-# NEXORA 2.0
+# NEXORA 2.0.1
 
 Discover. Connect. Belong.
 
-NEXORA is a Discord community directory with owner verification, automatic publishing, reviews, partner applications, giveaways, owner dashboards, audit logs, anti-spam controls, and SQLite persistence.
+NEXORA is a Discord community discovery directory with owner verification, automatic publishing, an owner dashboard, reviews, partner applications, giveaways, audit logs, anti-spam protection, statistics, maintenance mode, and automatic SQLite backups.
 
-## Behavior
-- Commands are restricted to Fire and NEXORA by default.
-- A listing auto-publishes only after the submitting user is verified as the target server owner or has Manage Server permission.
-- NEXORA must be installed in the target server to verify permissions and create an invite.
+## Core behavior
+- Text commands use the `!` prefix and work only in Fire (`1507663008292405339`) and NEXORA (`1571079983596830810`).
+- `!djoin SERVER_ID` publishes automatically only after the submitter is verified as the target server owner or has Manage Server permission. NEXORA must be installed in that target server to verify and create an invite.
 - Members choose whether to join. NEXORA never force-adds or mass-invites members.
-- Submission cooldown: five minutes per user.
-- Only the invoking djoin message and NEXORA's reply are auto-deleted, after 3 or 10 seconds.
-- Existing SQLite tables and records are preserved. New tables are additive.
+- Submission anti-spam cooldown: five minutes per user.
+- Auto-purge removes only the invoking `!djoin` message and its NEXORA response. Default: 10 seconds. The Fire owner can switch it to 3 seconds with `!dpurge 3`, or back with `!dpurge 10`.
+- Existing SQLite tables and records are preserved through additive `CREATE TABLE IF NOT EXISTS` migration. No existing table is dropped or renamed.
+- The Fire server owner is automatically recognized for network-owner controls. Optional additional owner IDs can be configured with `OWNER_IDS`.
 
 ## Community commands
-- !dhelp
-- !djoin SERVER_ID
-- !dverify SERVER_ID
-- !dstatus
-- !dservers
-- !dinfo SERVER_ID
-- !dremove [SERVER_ID]
-- !dprofile
-- !ddashboard
-- !dleaderboard
-- !dvote SERVER_ID 1-5 [review]
-- !dpartner SERVER_ID
-- !dpartners
-- !dstats
+- `!dhelp`
+- `!djoin SERVER_ID`
+- `!dverify SERVER_ID`
+- `!dstatus`
+- `!dservers`
+- `!dinfo SERVER_ID`
+- `!dremove [SERVER_ID]`
+- `!dprofile`
+- `!ddashboard`
+- `!dleaderboard`
+- `!dvote SERVER_ID 1-5 [review]`
+- `!dpartner SERVER_ID`
+- `!dpartners`
+- `!dstats`
 
 ## Giveaways
-- !dgiveaway 10m 1 Prize name
-- !dendgiveaway MESSAGE_ID (owner)
-- !dreroll MESSAGE_ID (owner)
+- `!dgiveaway 10m 1 Prize name`
+- `!dendgiveaway MESSAGE_ID` (network owner)
+- `!dreroll MESSAGE_ID` (network owner)
 
-Duration range: 30 seconds to 30 days. Participants react with 🎉.
+Giveaways are free-entry: users enter by reacting with 🎉. Duration range: 30 seconds to 30 days. Removing the reaction removes the entry.
 
-## Owner controls
-- !dapprove SERVER_ID
-- !dreject SERVER_ID reason
-- !dtier USER_ID TIER
-- !daudit [limit]
-- !dmaintenance on|off
-- !dpurge 3|10
-- !dpartnerapprove SERVER_ID
-- !dadminhelp
+## Network-owner controls
+- `!dapprove SERVER_ID`
+- `!dreject SERVER_ID reason`
+- `!dtier USER_ID TIER`
+- `!daudit [limit]`
+- `!dmaintenance on|off`
+- `!dpurge 3|10`
+- `!dpartnerapprove SERVER_ID`
+- `!dbackup` (create an immediate backup)
+- `!dadminhelp`
 
-Owner-only commands require the network owner's Discord user ID in OWNER_IDS.
+## Environment variables
+- `DISCORD_TOKEN`: bot token. Keep it secret.
+- `OWNER_IDS`: optional comma-separated additional network-owner Discord IDs. Fire server owner is detected automatically.
+- `ALLOWED_GUILD_IDS`: optional comma-separated guild allowlist; defaults to Fire and NEXORA.
+- `DATABASE_PATH`: SQLite file path. **Keep the same path and Railway volume already used by the existing bot** to retain its data.
+- `BACKUP_DIR`: backup folder. For a Railway volume mounted at `/data`, use `/data/backups`.
+- `BACKUP_RETENTION`: number of most recent backups to keep; defaults to 7.
 
-## Environment
-- DISCORD_TOKEN: bot token. Keep it secret.
-- OWNER_IDS: comma-separated Discord user IDs authorized for network administration. Add the Fire owner ID here.
-- ALLOWED_GUILD_IDS: optional comma-separated guild allowlist. Defaults to Fire and NEXORA.
-- DATABASE_PATH: SQLite path. For Railway persistent storage use /data/nexora.db.
+Example `.env` values (do not put a real token in GitHub):
+```env
+DISCORD_TOKEN=your_discord_bot_token
+OWNER_IDS=
+ALLOWED_GUILD_IDS=1507663008292405339,1571079983596830810
+DATABASE_PATH=/data/nexora.db
+BACKUP_DIR=/data/backups
+BACKUP_RETENTION=7
+```
 
-Enable Message Content Intent, Server Members Intent, and Reaction Intent in the Discord Developer Portal. The bot needs View Channels, Send Messages, Embed Links, Read Message History, Add Reactions, and Create Instant Invite in target servers where it verifies and publishes listings.
+## Railway and Discord setup
+- Deploy using the included Dockerfile.
+- Keep the existing Railway volume mounted at the same location. Do not delete or recreate it.
+- Keep `DATABASE_PATH` pointing at the existing database file. If the current deployment uses a different path, preserve that exact value instead of copying the example.
+- Enable Message Content Intent, Server Members Intent, and Reaction Intent in the Discord Developer Portal.
+- Bot permissions needed: View Channels, Send Messages, Embed Links, Read Message History, Add Reactions, and Create Instant Invite in target community servers.
 
-## Railway
-Deploy with the included Dockerfile. Attach a persistent volume mounted at /data and set DATABASE_PATH=/data/nexora.db. Set DISCORD_TOKEN and OWNER_IDS as Railway variables. Never commit secrets or share the bot token in chat.
+## Backups and data safety
+A SQLite backup is created automatically on startup and every 24 hours, using SQLite's online backup API. Old backups beyond the retention count are pruned. `!dbackup` creates an immediate backup. Backups are only durable if `BACKUP_DIR` is on persistent storage.
 
-## Data safety and limitations
-NEXORA 2.0 creates tables for verified servers, reviews, partners, giveaways, giveaway entries, and settings. It does not drop or rename existing tables. Keep the Railway volume attached to preserve current data.
-
-Giveaway winners are selected randomly from users who reacted before the giveaway ended. Auto-purge affects only the invoking djoin command and its corresponding NEXORA reply. SQLite is intended for a single bot process; larger deployments should plan backups and a tested restore procedure.
+The migration is additive and keeps the original `users`, `listings`, `joins`, `cooldowns`, and `logs` data. The new tables support verification, reviews, partners, giveaways, giveaway entries, and settings. SQLite is intended for one bot process.
