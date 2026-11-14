@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# NEXORA runtime database and backup files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+backups/
+/data/
