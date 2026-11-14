@@ -18,6 +18,17 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+async def send_embed(ctx, content=None, *, embed=None, **kwargs):
+    """Send a consistently branded NEXORA embed response."""
+    if embed is None:
+        embed = discord.Embed(description=str(content) if content is not None else None, color=0x102A43)
+    else:
+        embed.color = discord.Color(0x102A43)
+    embed.set_author(name="NEXORA | COMMUNITY NETWORK")
+    embed.set_footer(text="CYAN • NAVY  |  Discover. Connect. Belong.")
+    return await ctx.reply(embed=embed, **kwargs)
+
+
 # NEXORA visual identity: bright cyan with deep old-navy branding.
 NEXORA_CYAN = 0x00D2FF
 NEXORA_NAVY = 0x0B1B36
@@ -27,7 +38,7 @@ async def branded_reply(ctx, *args, **kwargs):
     if existing_embed is not None:
         existing_embed.color = NEXORA_CYAN
         existing_embed.set_footer(text="NEXORA | Community Network")
-        return await ctx.reply(embed=existing_embed, **kwargs)
+        return await send_embed(ctx, embed=existing_embed, **kwargs)
 
     content = args[0] if args else kwargs.pop("content", None)
     embed = discord.Embed(
@@ -36,7 +47,7 @@ async def branded_reply(ctx, *args, **kwargs):
         color=NEXORA_CYAN
     )
     embed.set_footer(text="NEXORA | Community Network")
-    return await ctx.reply(embed=embed, **kwargs)
+    return await send_embed(ctx, embed=embed, **kwargs)
 
 
 def ts(): return datetime.now(timezone.utc).isoformat()
