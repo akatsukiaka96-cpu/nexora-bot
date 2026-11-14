@@ -64,50 +64,69 @@ async def on_member_join(member):
 @bot.command(name="dhelp")
 async def dhelp(ctx):
     e=discord.Embed(title="NEXORA | Commands",description="Discover. Connect. Belong.",color=0x00D2FF)
-    entries=[("!djoin SERVER_ID INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
+    entries=[("!djoin INVITE_URL","Submit a server for review"),("!dstatus","Check your listing status"),("!dremove [SERVER_ID]","Request listing removal"),("!dinfo SERVER_ID","View an approved listing"),("!dquota","Check your tier target"),("!dservers","Browse approved communities"),("!dprofile","View your profile"),("!dleaderboard","Network statistics")]
     for n,v in entries:e.add_field(name=n,value=v,inline=False)
     e.set_footer(text="All joins are voluntary. No join counts are guaranteed.")
     await ctx.send(embed=e)
 
 
-async def delete_djoin_command_later(message):
+async def purge_djoin_messages(command_message, response_message):
     await asyncio.sleep(10)
-    try:
-        await message.delete()
-    except discord.HTTPException:
-        pass
+    for message in (command_message, response_message):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+
 
 async def djoin_reply(ctx, *args, **kwargs):
-    kwargs.setdefault("delete_after", 10)
     response = await ctx.reply(*args, **kwargs)
-    asyncio.create_task(delete_djoin_command_later(ctx.message))
+    asyncio.create_task(purge_djoin_messages(ctx.message, response))
     return response
 
+
 @bot.command(name="djoin")
-async def djoin(ctx,server_id:int,invite_url:str):
-    if not 10<=len(str(server_id))<=25 or not INVITE_RE.fullmatch(invite_url):
-        return await djoin_reply("Usage: !djoin SERVER_ID valid_discord_invite")
-    guild=bot.get_guild(server_id)
-    if guild is None:return await djoin_reply("NEXORA must be installed in that server to verify its listing.")
+async def djoin(ctx, invite_url: str):
+    if not INVITE_RE.fullmatch(invite_url):
+        return await djoin_reply(ctx, "Usage: !djoin https://discord.gg/your-invite")
+
+    try:
+        invite = await bot.fetch_invite(invite_url)
+    except discord.HTTPException:
+        return await djoin_reply(ctx, "That invite link is invalid or expired. Please check it and try again.")
+
+    if invite.guild is None:
+        return await djoin_reply(ctx, "I couldn't identify the server from that invite. Please use a server invite link.")
+
+    server_id = invite.guild.id
+    guild = bot.get_guild(server_id)
+    if guild is None:
+        return await djoin_reply(ctx, "NEXORA must be installed in that server before it can be submitted.")
+
+    invite_url = invite.url
     ensure_user(ctx.author.id)
     with conn() as c:
-        old=c.execute("SELECT last_submit FROM cooldowns WHERE user_id=?",(ctx.author.id,)).fetchone()
+        old = c.execute("SELECT last_submit FROM cooldowns WHERE user_id=?", (ctx.author.id,)).fetchone()
         if old:
-            elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(old["last_submit"])).total_seconds()
-            if elapsed<300:return await djoin_reply(f"Please wait {int(300-elapsed)} seconds before submitting again.")
-        prior=c.execute("SELECT owner_id FROM listings WHERE server_id=?",(server_id,)).fetchone()
-        if prior and prior["owner_id"]!=ctx.author.id and not is_admin(ctx):return await djoin_reply("That server already has a listing owner.")
+            elapsed = (datetime.now(timezone.utc)-datetime.fromisoformat(old["last_submit"])).total_seconds()
+            if elapsed < 300:
+                return await djoin_reply(ctx, f"Please wait {int(300-elapsed)} seconds before submitting again.")
+        prior = c.execute("SELECT owner_id FROM listings WHERE server_id=?", (server_id,)).fetchone()
+        if prior and prior["owner_id"] != ctx.author.id and not is_admin(ctx):
+            return await djoin_reply(ctx, "That server already has a listing owner.")
         c.execute("""INSERT INTO listings(server_id,owner_id,invite_url,status,description,created_at,updated_at) VALUES(?,?,?,'pending',?,?,?)
-        ON CONFLICT(server_id) DO UPDATE SET invite_url=excluded.invite_url,status='pending',updated_at=excluded.updated_at""",(server_id,ctx.author.id,invite_url,guild.description or "",ts(),ts()))
+        ON CONFLICT(server_id) DO UPDATE SET invite_url=excluded.invite_url,status='pending',updated_at=excluded.updated_at""",
+        (server_id,ctx.author.id,invite_url,guild.description or "",ts(),ts()))
         c.execute("INSERT INTO cooldowns(user_id,last_submit) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_submit=excluded.last_submit",(ctx.author.id,ts()))
         c.commit()
     audit(ctx.author.id,"listing_submitted",str(server_id))
-    await djoin_reply(f"**{guild.name}** submitted for review. Members can choose to join using its invite. No one is automatically added.")
+    await djoin_reply(ctx, f"**{guild.name}** submitted for review. Members can choose to join using its invite. No one is automatically added.")
+
 
 @bot.command(name="dstatus")
 async def dstatus(ctx):
     with conn() as c: rows=c.execute("SELECT server_id,status FROM listings WHERE owner_id=? ORDER BY created_at DESC",(ctx.author.id,)).fetchall()
-    if not rows:return await ctx.reply("No listings yet. Use !djoin SERVER_ID INVITE_URL.")
+    if not rows:return await ctx.reply("No listings yet. Use !djoin INVITE_URL.")
     shown=rows[:15]
     message="\n".join(f"• {r['server_id']} · {r['status'].title()}" for r in shown)
     if len(rows)>15: message += f"\nShowing the 15 most recent of {len(rows)} listings."
