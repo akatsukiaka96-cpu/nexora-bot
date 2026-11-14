@@ -6,7 +6,7 @@ from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 VERSION = "1.1.0"
-ALLOWED_GUILD_IDS = {int(x) for x in os.getenv("ALLOWED_GUILD_IDS", "").split(",") if x.strip().isdigit()}
+ALLOWED_GUILD_IDS = {int(x) for x in os.getenv("ALLOWED_GUILD_IDS", "1507663008292405339,1571079983596830810").split(",") if x.strip().isdigit()}
 DB_PATH = os.getenv("DATABASE_PATH", "nexora.db")
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 OWNER_IDS = {int(x) for x in os.getenv("OWNER_IDS", "").split(",") if x.strip().isdigit()}
